@@ -28,6 +28,7 @@ from garmin_mcp import nutrition
 from garmin_mcp import workout_builders
 from garmin_mcp import courses
 from garmin_mcp import activity_analysis
+from garmin_mcp.mcp_oauth import GarminOAuthTokenVerifier, oauth_auth_settings, run_oauth_http_server
 
 
 def is_interactive_terminal() -> bool:
@@ -240,8 +241,25 @@ def main():
     courses.configure(garmin_client)
     activity_analysis.configure(garmin_client)
 
+    transport = os.getenv("MCP_TRANSPORT", "stdio")
+    host = os.getenv("MCP_HOST", "127.0.0.1")
+    port = int(os.getenv("MCP_PORT", "8000"))
+    oauth_enabled = os.getenv("MCP_OAUTH_ENABLED", "false").lower() in ("true", "1", "yes")
+    public_base_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+
     # Create the MCP app
-    app = FastMCP("Garmin Connect v1.0")
+    if oauth_enabled:
+        app = FastMCP(
+            "Garmin Connect v1.0",
+            host=host,
+            port=port,
+            stateless_http=True,
+            json_response=True,
+            token_verifier=GarminOAuthTokenVerifier(),
+            auth=oauth_auth_settings(public_base_url),
+        )
+    else:
+        app = FastMCP("Garmin Connect v1.0", host=host, port=port)
 
     # Register tools from all modules
     app = activity_management.register_tools(app)
@@ -264,7 +282,20 @@ def main():
     app = workout_templates.register_resources(app)
 
     # Run the MCP server
-    app.run()
+    if oauth_enabled:
+        run_oauth_http_server(
+            app,
+            host,
+            port,
+            {
+                "PUBLIC_BASE_URL": public_base_url,
+                "GOOGLE_CLIENT_ID": os.getenv("GOOGLE_CLIENT_ID") or os.getenv("PROVIDERS_GOOGLE_CLIENT_ID", ""),
+                "GOOGLE_CLIENT_SECRET": os.getenv("GOOGLE_CLIENT_SECRET") or os.getenv("PROVIDERS_GOOGLE_CLIENT_SECRET", ""),
+                "GARMIN_MCP_ALLOWED_EMAILS": os.getenv("GARMIN_MCP_ALLOWED_EMAILS") or os.getenv("WHITELIST", ""),
+            },
+        )
+    else:
+        app.run(transport=transport)
 
 
 if __name__ == "__main__":
